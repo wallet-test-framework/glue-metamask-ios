@@ -16,8 +16,7 @@ import {
     SwitchEthereumChain,
 } from "@wallet-test-framework/glue";
 import { URL } from "node:url";
-import { Builder, By, WebDriver, until } from "selenium-webdriver";
-import Chrome from "selenium-webdriver/chrome.js";
+import { Browser, remote } from "webdriverio";
 
 function delay(ms: number): Promise<void> {
     return new Promise((res) => setTimeout(res, ms));
@@ -67,362 +66,348 @@ class Lock<T> {
     }
 }
 
-class TahoDriver {
+type Event = {
+    uuid: string,
+};
+
+class MetaMaskIosDriver {
     public static readonly PASSWORD = "ethereum1";
-    private readonly newWindows: string[];
-    private readonly driver: Lock<WebDriver>;
+    public static readonly SEED =
+        "basket cradle actor pizza similar liar suffer another all fade flag brave";
+    public readonly capabilities: object;
+    private readonly driver: Lock<Browser>;
+    private pendingEvent: null | Event = null;
     private running: boolean;
     private windowWatcher: Promise<void>;
-    private readonly glue: TahoGlue;
-    public extensionUrl: string | null;
+    private readonly glue: MetaMaskIosGlue;
 
-    private constructor(driver: WebDriver, glue: TahoGlue) {
+    private constructor(driver: Browser, glue: MetaMaskIosGlue, caps: object) {
         this.driver = new Lock(driver);
         this.running = true;
         this.windowWatcher = this.watchWindows();
-        this.newWindows = [];
         this.glue = glue;
-        this.extensionUrl = null;
+        this.capabilities = caps;
     }
 
     public static async create(
-        glue: TahoGlue,
-        extensionPath: string,
-        browserVersion: string | null | undefined,
-    ): Promise<TahoDriver> {
-        const chrome = new Chrome.Options();
-        if (typeof browserVersion === "string") {
-            chrome.setBrowserVersion(browserVersion);
-        }
-        chrome.addExtensions(extensionPath);
+        glue: MetaMaskIosGlue,
+        udid: string,
+        platformVersion: string,
+    ): Promise<MetaMaskIosDriver> {
+        // TODO: Pass-through all the appium stuff.
+        const capabilities = {
+            platformName: "iOS",
+            "appium:xcodeOrgId": "G28G5QGYX9",
+            "appium:xcodeSigningId": "iPhone Developer",
+            "appium:platformVersion": platformVersion,
+            "appium:automationName": "xcuitest",
+            "appium:deviceName": "iPhone 13",
+            "appium:udid": udid,
+            "appium:showXcodeLog": true,
+            "appium:prebuildWDA": true,
+            "appium:newCommandTimeout": 120,
+        };
 
-        const driver = await new Builder()
-            .forBrowser("chrome")
-            .setChromeOptions(chrome)
-            .build();
+        const bundleCapabilities = {
+            ...capabilities,
+            "appium:bundleId": "io.metamask.MetaMask",
+        };
 
-        await driver.manage().setTimeouts({ implicit: 10000 });
+        const options = {
+            hostename: "localhost",
+            port: 4723,
+            capabilities: bundleCapabilities,
+        };
 
-        return new TahoDriver(driver, glue);
+        const driver = await remote(options);
+
+        await driver.setTimeout({ implicit: 10000 });
+
+        return new MetaMaskIosDriver(driver, glue, capabilities);
     }
 
-    public async unlockWithPassword(_driver: WebDriver): Promise<void> {
-        //TODO: type password if wallet is locked
+    public async unlockWithPassword(driver: Browser): Promise<void> {
+        const passwordTxt = await driver.$('(//XCUIElementTypeOther[@name="Password"])[4]');
+        let retries = 3;
+        let exception = null;
+
+        while (retries) {
+            try {
+                await passwordTxt.clearValue();
+                await passwordTxt.addValue(MetaMaskIosDriver.PASSWORD);
+                exception = null;
+                break;
+            } catch (e) {
+                if (await passwordTxt.isExisting()) {
+                    retries -= 1;
+                    exception = e;
+                } else {
+                    return;
+                }
+            }
+        }
+
+        if (exception) {
+            throw exception;
+        }
+
+        const unlockBtn = await driver.$('//XCUIElementTypeButton[@name="UNLOCK"]');
+
+        while (await unlockBtn.isExisting()) {
+            await unlockBtn.click();
+        }
     }
 
     private async emitRequestAccounts(
-        driver: WebDriver,
-        handle: string,
-    ): Promise<void> {
+        driver: Browser,
+    ): Promise<Event> {
         logger.debug("emitting requestaccounts");
-        await this.unlockWithPassword(driver);
+
+        // XXX: MetaMask doesn't display the full address anywhere in this
+        //      dialog, so we check for the address the seed phrase would
+        //      create and return that.
+        const account = await driver.$(
+            '//XCUIElementTypeOther[@label="Account 1 0xb7B4...C8Cf"]'
+        );
+
+        if (!await account.isExisting()) {
+            throw new Error("couldn't find account in request accounts");
+        }
+
+        const uuid = crypto.randomUUID();
 
         this.glue.emit(
             "requestaccounts",
-            new RequestAccountsEvent(handle, {
-                accounts: [],
+            new RequestAccountsEvent(uuid, {
+                accounts: ["0xb7b4d68047536a87f0926a76dd0b96b3a044c8cf"],
             }),
         );
+
+        return { uuid };
     }
 
     private async emitSendTransaction(
-        driver: WebDriver,
+        driver: Browser,
         handle: string,
     ): Promise<void> {
         logger.debug("emitting sendtransaction");
-        await this.unlockWithPassword(driver);
 
-        const addressDetails = await driver.findElement(
-            By.css("#recipientAddress"),
-        );
-        const addressTitle = await addressDetails.getAttribute("title");
-        const toAddress = addressTitle
-            .substring(addressTitle.indexOf(":") + 1)
-            .trim();
-        const senderInfo = await driver.findElement(
-            By.css(".account_info_label"),
-        );
-        const fromAddress = await senderInfo.getAttribute("title");
-        const spendAmount = await driver.findElement(By.css(".spend_amount"));
-        const textCost = await spendAmount.getText();
-        const cost = /[0-9]+(.[0-9]+)?(?= BNB)/.exec(textCost)?.[0] || "";
-        const parsedCost = parseUnits(cost, 18);
-
+        throw new Error("not implemented");
         this.glue.emit(
             "sendtransaction",
             new SendTransactionEvent(handle, {
-                from: fromAddress,
-                to: toAddress,
+                from: "TODO",
+                to: "TODO",
                 data: "",
-                value: parsedCost.toString(),
+                value: "TODO",
             }),
         );
     }
 
     private async emitSignTransaction(
-        driver: WebDriver,
+        driver: Browser,
         handle: string,
     ): Promise<void> {
         logger.debug("emitting signtransaction");
-        await this.unlockWithPassword(driver);
 
-        const addressDetails = await driver.findElement(
-            By.css("#recipientAddress"),
-        );
-        const addressTitle = await addressDetails.getAttribute("title");
-        const toAddress = addressTitle
-            .substring(addressTitle.indexOf(":") + 1)
-            .trim();
-        const senderInfo = await driver.findElement(
-            By.css(".account_info_label"),
-        );
-        const fromAddress = await senderInfo.getAttribute("title");
-        const spendAmount = await driver.findElement(By.css(".spend_amount"));
-        const textCost = await spendAmount.getText();
-        const cost = /[0-9]+(.[0-9]+)?(?= BNB)/.exec(textCost)?.[0] || "";
-        const parsedCost = parseUnits(cost, 18);
+        throw new Error("not implemented");
 
         this.glue.emit(
             "signtransaction",
             new SignTransactionEvent(handle, {
-                from: fromAddress,
-                to: toAddress,
+                from: "TODO",
+                to: "TODO",
                 data: "",
-                value: parsedCost.toString(),
+                value: "TODO",
             }),
         );
     }
 
     private async emitSignMessage(
-        driver: WebDriver,
+        driver: Browser,
         handle: string,
     ): Promise<void> {
         logger.debug("emitting signmessage");
-        await this.unlockWithPassword(driver);
 
-        const messageContent = await driver.findElement(
-            By.css("[data-testid='message-content']"),
-        );
-        const message = await messageContent.getText();
+        throw new Error("not implemented");
 
         this.glue.emit(
             "signmessage",
             new SignMessageEvent(handle, {
-                message: message,
+                message: "TODO",
             }),
         );
     }
 
-    private async processNewWindow(
-        driver: WebDriver,
-        handle: string,
-    ): Promise<void> {
-        logger.debug("Processing window", handle);
-        await driver.switchTo().window(handle);
+    private async event(
+        driver: Browser,
+    ): Promise<Event | null> {
+        await this.unlockWithPassword(driver);
 
-        const location = await driver.getCurrentUrl();
-        const url = new URL(location);
-        const action = url.searchParams.get("page");
+        const connectAccountModal = await driver.$(
+            '//XCUIElementTypeOther[@name="connect-account-modal"]'
+        );
 
-        let title;
-        switch (action) {
-            case "/dapp-permission":
-                await this.emitRequestAccounts(driver, handle);
-                break;
-            case "/sign-transaction":
-                {
-                    const sections = await driver.findElements(
-                        By.css(`[data-broadcast-on-sign]`),
-                    );
-                    if (sections.length === 0) {
-                        break;
-                    }
-                    const section = sections[0];
-                    const broadcastOnSign = await section.getAttribute(
-                        "data-broadcast-on-sign",
-                    );
-                    if (broadcastOnSign === "true") {
-                        await this.emitSendTransaction(driver, handle);
-                    } else {
-                        await this.emitSignTransaction(driver, handle);
-                    }
-                }
-                break;
-            case "signEthereumMessage":
-                await this.emitSignMessage(driver, handle);
-                break;
-            default:
-                title = await driver.getTitle();
-                logger.warn(
-                    "unknown event from window",
-                    title,
-                    "@",
-                    location,
-                    "(",
-                    handle,
-                    ")",
-                );
-                return;
+        if (await connectAccountModal.isExisting()) {
+            return await this.emitRequestAccounts(driver);
         }
-    }
 
-    private async processNewWindows(): Promise<void> {
-        await this.driver.lock(async (driver) => {
-            const popped = this.newWindows.splice(0);
-
-            let current = null;
-
-            try {
-                current = await driver.getWindowHandle();
-            } catch {
-                /* no-op */
-            }
-
-            try {
-                for (const one of popped) {
-                    try {
-                        await this.processNewWindow(driver, one);
-                    } catch (e) {
-                        logger.debug("Window", one, "disappeared");
-                        continue;
-                    }
-                }
-            } finally {
-                if (current) {
-                    await driver.switchTo().window(current);
-                }
-            }
-        });
+        return null;
     }
 
     private async watchWindows(): Promise<void> {
-        let previous: string[] = await this.driver
-            .unsafe()
-            .getAllWindowHandles();
-
         while (this.running) {
-            const next = await this.driver.unsafe().getAllWindowHandles();
-            const created = next.filter((v) => !previous.includes(v));
-            previous = next;
+            await delay(500);
 
-            if (created.length > 0) {
-                logger.debug("Found windows", created);
-                this.newWindows.push(...created);
-                await this.processNewWindows();
+            if (this.pendingEvent) {
+                continue;
             }
 
-            await delay(500);
+            const appState: number = await this.driver.unsafe().executeScript("mobile: queryAppState", [
+                { bundleId: "io.metamask.MetaMask" },
+            ]);
+
+            if (4 !== appState) {
+                // The app is not in the foreground.
+                continue;
+            }
+
+            await this.driver.lock(async (driver) => {
+                this.pendingEvent = await this.event(driver);
+            });
         }
     }
 
-    public lock<T>(callback: (wb: WebDriver) => Promise<T>): Promise<T> {
+    public lock<T>(callback: (wb: Browser) => Promise<T>): Promise<T> {
         return this.driver.lock(callback);
     }
 
     public async setup(): Promise<void> {
         await this.driver.lock(async (driver) => {
-            let extensionUrl = await driver.wait(async () => {
-                const handles = await driver.getAllWindowHandles();
-                for (const handle of handles) {
-                    await driver.switchTo().window(handle);
-                    const url = await driver.getCurrentUrl();
+            // Get through the intro screen.
+            try {
+                const getStartedBtn = await driver.$(
+                    '//XCUIElementTypeButton[@name="Get started"]',
+                );
+                await getStartedBtn.waitForExist();
+                await getStartedBtn.click();
+            } catch (e) {}
 
-                    if (url.indexOf("-extension://")) {
-                        return url;
-                    }
-                }
-            }, 10000);
-            if (!extensionUrl) {
-                throw new Error("Failed to find extension window.");
+            // Wait for and click the Import Wallet button.
+            const importWalletBtn = await driver.$(
+                '//XCUIElementTypeOther[@name="Import using Secret Recovery Phrase"]',
+            );
+            await importWalletBtn.waitForExist();
+            await importWalletBtn.click();
+
+            // Check all the terms and agree.
+            const scroll = await driver.$(
+                '//XCUIElementTypeStaticText[@name="optin-metrics-title-id"]/..',
+            );
+            await driver.executeScript("mobile: scroll", [
+                { direction: "down", element: scroll.elementId },
+            ]);
+
+            const denyBtn = await driver.$(
+                '//XCUIElementTypeButton[@name="optin-metrics-no-thanks-button-id"]',
+            );
+            await denyBtn.click();
+
+            try {
+                const scrollBtn = await driver.$(
+                    '//XCUIElementTypeOther[@name="terms-of-use-scroll-end-arrow-button-id"]',
+                );
+                await scrollBtn.click();
+
+                const termsBtn = await driver.$(
+                    '//XCUIElementTypeOther[@name="terms-of-use-checkbox"]',
+                );
+                await termsBtn.click();
+
+                const agreeBtn = await driver.$(
+                    '//XCUIElementTypeButton[@name="terms-of-use-accept-button-id"]',
+                );
+                await agreeBtn.waitForEnabled();
+                await agreeBtn.click();
+            } catch (e) {}
+
+            // Enter the seed phrase.
+            const showBtn = await driver.$(
+                '(//XCUIElementTypeOther[@name="Show"])[2]',
+            );
+            await showBtn.click();
+
+            const seedTextView = await driver.$("//XCUIElementTypeTextView");
+            await seedTextView.clearValue();
+            await seedTextView.addValue(MetaMaskIosDriver.SEED);
+
+            const newPw = await driver.$(
+                '(//XCUIElementTypeOther[@name="New Password"])[5]'
+            );
+            await newPw.clearValue();
+            await newPw.addValue(MetaMaskIosDriver.PASSWORD);
+
+            const confirmPw = await driver.$(
+                '(//XCUIElementTypeOther[@name="Confirm password"])[4]'
+            );
+            await confirmPw.clearValue();
+            await confirmPw.addValue(MetaMaskIosDriver.PASSWORD);
+
+            const importBtn = await driver.$(
+                '//XCUIElementTypeButton[@name="import-from-seed-screen-submit-button-id"]'
+            );
+            await importBtn.waitForEnabled();
+
+            while (await importBtn.isExisting()) {
+                await importBtn.click();
             }
-            extensionUrl = extensionUrl.substring(0, extensionUrl.indexOf("#"));
-            extensionUrl = extensionUrl.substring(
-                0,
-                extensionUrl.lastIndexOf("/"),
-            );
-            this.extensionUrl = extensionUrl + "/popup.html";
 
-            const importExisting = await driver.findElement(
-                By.css("#existingWallet"),
-            );
-            await driver.wait(until.elementIsVisible(importExisting), 2000);
-            await importExisting.click();
+            // TODO: Can't figure out how to click the "Done" button.
+            await driver.executeScript("mobile: terminateApp", [
+                { bundleId: "io.metamask.MetaMask" },
+            ]);
+            await driver.executeScript("mobile: launchApp", [
+                { bundleId: "io.metamask.MetaMask" },
+            ]);
 
-            const byPhrase = await driver.findElement(By.css("#importSeed"));
-            await driver.wait(until.elementIsVisible(byPhrase), 2000);
-            await byPhrase.click();
-
-            const setPassword = await driver.findElement(By.css("#password"));
-            await driver.wait(until.elementIsVisible(setPassword), 2000);
-            await setPassword.click();
-            await setPassword.sendKeys(TahoDriver.PASSWORD);
-
-            const setPasswordVerify = await driver.findElement(
-                By.css("#passwordConfirm"),
-            );
-            await driver.wait(until.elementIsVisible(setPasswordVerify), 2000);
-            await setPasswordVerify.sendKeys("ethereum1");
-
-            const passwordContinue = await driver.findElement(
-                By.css("#confirm:not([disabled])"),
-            );
-            await driver.wait(until.elementIsVisible(passwordContinue), 2000);
-            await passwordContinue.click();
-
-            const secretInput = await driver.findElement(
-                By.css("#recovery_phrase"),
-            );
-            await driver.wait(until.elementIsVisible(secretInput), 2000);
-            await secretInput.sendKeys(
-                "basket cradle actor pizza similar liar suffer another all fade flag brave",
-            );
-
-            const importWallet = await driver.findElement(By.css("#import"));
-            await driver.wait(until.elementIsVisible(importWallet), 2000);
-            await importWallet.click();
-
-            const anim = await driver.findElement(By.css("[src$='.gif']"));
-            await driver.wait(until.elementIsVisible(anim), 2000);
-
-            await driver.close();
-            const handles = await driver.getAllWindowHandles();
-            await driver.switchTo().window(handles[0]);
+            await this.unlockWithPassword(driver);
         });
     }
 
     async stop(): Promise<void> {
         this.running = false;
         await this.driver.lock(async (driver) => {
-            await driver.quit();
+            await driver.deleteSession();
         });
     }
 }
 
-export class TahoGlue extends Glue {
+export class MetaMaskIosGlue extends Glue {
     private static async buildDriver(
-        glue: TahoGlue,
-        extensionPath: string,
-        browserVersion: string | null | undefined,
-    ): Promise<TahoDriver> {
-        const taho = await TahoDriver.create(
+        glue: MetaMaskIosGlue,
+        udid: string,
+        platformVersion: string,
+    ): Promise<MetaMaskIosDriver> {
+        const metamask = await MetaMaskIosDriver.create(
             glue,
-            extensionPath,
-            browserVersion,
+            udid,
+            platformVersion,
         );
-        await taho.setup();
-        return taho;
+        await metamask.setup();
+        return metamask;
     }
 
     private readonly driver;
     public readonly reportReady: Promise<Report>;
     private readonly resolveReport: (report: Report) => unknown;
+    private readonly udid: string;
+    private readonly platformVersion: string;
 
-    constructor(
-        extensionPath: string,
-        browserVersion: string | null | undefined,
-    ) {
+    constructor(udid: string, platformVersion: string) {
         super();
-        this.driver = TahoGlue.buildDriver(this, extensionPath, browserVersion);
+        this.udid = udid;
+        this.platformVersion = platformVersion;
+        this.driver = MetaMaskIosGlue.buildDriver(this, udid, platformVersion);
 
         let resolveReport;
         this.reportReady = new Promise((res) => {
@@ -439,195 +424,96 @@ export class TahoGlue extends Glue {
     async launch(url: string): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            await driver.navigate().to(url);
+            const capabilities = {
+                platformName: "iOS",
+                browserName: "Safari",
+                "appium:xcodeOrgId": "G28G5QGYX9",
+                "appium:xcodeSigningId": "iPhone Developer",
+                "appium:platformVersion": this.platformVersion,
+                "appium:deviceName": "iPhone 13",
+                "appium:udid": this.udid,
+                "appium:automationName": "xcuitest",
+                "appium:shouldTerminateApp": false,
+                // TODO: Look into safariInitialUrl
+            };
 
-            const btn = await driver.findElement(By.css("#connect"));
-            await driver.wait(until.elementIsVisible(btn), 2000);
-            await btn.click();
+            const options = {
+                hostename: "localhost",
+                port: 4723,
+                capabilities,
+            };
+
+            const safari = await remote(options);
+
+            await safari.setTimeout({ implicit: 10000 });
+
+            await safari.navigateTo(url);
+
+            const wcBtn = await safari.$("#walletConnect");
+            await wcBtn.waitForClickable();
+            await wcBtn.click();
+
+            const allWalletsBtn = await safari.$(
+                ">>>wcm-view-all-wallets-button button",
+            );
+            await allWalletsBtn.waitForClickable();
+            await allWalletsBtn.click();
+
+            const walletSearch = await safari.$(">>>wcm-search-input input");
+            await walletSearch.waitForExist();
+            await walletSearch.clearValue();
+            await walletSearch.addValue("metamask");
+
+            const metamaskBtn = await safari.$(
+                '>>>wcm-wallet-button[walletid="c57ca95b47569778a828d19178114f4db188b89b763c899ba0be274e97267d96"] button',
+            );
+            await metamaskBtn.click();
+
+            await safari.waitUntil(async () => {
+                try {
+                    await safari.acceptAlert();
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            });
+
+            await driver.reloadSession((await this.driver).capabilities);
         });
     }
 
     override async activateChain(action: ActivateChain): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            const current = await driver.getWindowHandle();
-            await driver.switchTo().newWindow("window");
-            await driver.navigate().to("https://chainlist.org/");
-            const chainListWindow = await driver.getWindowHandle();
-            const openWindows = await driver.getAllWindowHandles();
-
-            await driver.executeScript(
-                `ethereum.request({method:"eth_requestAccounts"});`,
-            );
-            const popupWindow = await driver.wait(async () => {
-                const handles = await driver.getAllWindowHandles();
-                const newHandles = handles.filter(
-                    (x) => !openWindows.includes(x),
-                );
-                return newHandles[0];
-            });
-            openWindows.push(popupWindow);
-
-            await driver.switchTo().window(popupWindow);
-
-            const btn = await driver.findElement(By.css("#close"));
-            await driver.wait(until.elementIsVisible(btn), 2000);
-            await btn.click();
-
-            const btn2 = await driver.findElement(By.css("#grantPermission"));
-            await driver.wait(until.elementIsVisible(btn2), 2000);
-            await btn2.click();
-
-            await driver.switchTo().window(chainListWindow);
-            await driver.executeScript(
-                `ethereum.request({"method":"wallet_addEthereumChain","params":[{"chainId":"${action.chainId}","chainName":"BNB Chain LlamaNodes","nativeCurrency":{"name":"BNB Chain Native Token","symbol":"BNB","decimals":18},"rpcUrls":["${action.rpcUrl}"],"blockExplorerUrls":["https://bscscan.com"]},"0xb7b4d68047536a87f0926a76dd0b96b3a044c8cf","Chainlist"]});`,
-            );
-
-            const addChainWindow = await driver.wait(async () => {
-                const handles = await driver.getAllWindowHandles();
-                const newHandles = handles.filter(
-                    (x) => !openWindows.includes(x),
-                );
-                return newHandles[0];
-            });
-            await driver.switchTo().window(addChainWindow);
-
-            const btn3 = await driver.findElement(By.css("#addNewChain"));
-            await driver.wait(until.elementIsVisible(btn3), 2000);
-            await btn3.click();
-
-            await driver.switchTo().window(chainListWindow);
-            await driver.close();
-
-            await driver.switchTo().window(current);
+            throw new Error("not implemented");
         });
     }
 
     override async requestAccounts(action: RequestAccounts): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            const current = await driver.getWindowHandle();
-            try {
-                await driver.switchTo().window(action.id);
-                let testid: string;
-
-                switch (action.action) {
-                    case "approve":
-                        testid = "grantPermission";
-                        break;
-                    case "reject":
-                        testid = "denyPermission";
-                        break;
-                    default:
-                        throw new Error(
-                            `unsupported action ${action as string}`,
-                        );
-                }
-
-                const btn = await driver.findElement(
-                    By.css(`#${testid}:not([disabled])`),
-                );
-                await driver.wait(until.elementIsVisible(btn), 2000);
-                await btn.click();
-            } finally {
-                await driver.switchTo().window(current);
-            }
+            throw new Error("not implemented");
         });
     }
 
     override async signMessage(action: SignMessage): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            const current = await driver.getWindowHandle();
-            try {
-                await driver.switchTo().window(action.id);
-                let testid: string;
-
-                switch (action.action) {
-                    case "approve":
-                        testid = "sign-message";
-                        break;
-                    case "reject":
-                        testid = "cancel-message";
-                        break;
-                    default:
-                        throw new Error(
-                            `unsupported action ${action as string}`,
-                        );
-                }
-
-                const btn = await driver.findElement(
-                    By.css(`[data-testid='${testid}']:not([disabled])`),
-                );
-                await driver.wait(until.elementIsVisible(btn), 2000);
-                await btn.click();
-            } finally {
-                await driver.switchTo().window(current);
-            }
+            throw new Error("not implemented");
         });
     }
 
     override async sendTransaction(action: SendTransaction): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            const current = await driver.getWindowHandle();
-            try {
-                await driver.switchTo().window(action.id);
-                let testid: string;
-
-                switch (action.action) {
-                    case "approve":
-                        testid = "request-confirm-button";
-                        break;
-                    case "reject":
-                        testid = "request-cancel-button";
-                        break;
-                    default:
-                        throw new Error(
-                            `unsupported action ${action as string}`,
-                        );
-                }
-
-                const btn = await driver.findElement(
-                    By.css(`[data-testid='${testid}']:not([disabled])`),
-                );
-                await driver.wait(until.elementIsVisible(btn), 2000);
-                await btn.click();
-            } finally {
-                await driver.switchTo().window(current);
-            }
+            throw new Error("not implemented");
         });
     }
 
     override async signTransaction(action: SignTransaction): Promise<void> {
         const cb = await this.driver;
         await cb.lock(async (driver) => {
-            const current = await driver.getWindowHandle();
-            try {
-                await driver.switchTo().window(action.id);
-                let testid: string;
-
-                switch (action.action) {
-                    case "approve":
-                        testid = "sign";
-                        break;
-                    case "reject":
-                        testid = "reject";
-                        break;
-                    default:
-                        throw new Error(
-                            `unsupported action ${action as string}`,
-                        );
-                }
-
-                const btn = await driver.findElement(
-                    By.css(`#${testid}:not(.disabled)`),
-                );
-                await driver.wait(until.elementIsVisible(btn), 2000);
-                await btn.click();
-            } finally {
-                await driver.switchTo().window(current);
-            }
+            throw new Error("not implemented");
         });
     }
 

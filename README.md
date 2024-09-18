@@ -1,6 +1,6 @@
-## Wallet Test Framework: Taho
+## Wallet Test Framework: Unstoppable
 
-A tool to automate the Taho wallet use use with Wallet Test Framework.
+A tool to automate the Unstoppable wallet use use with Wallet Test Framework.
 
 ## Installation
 
@@ -14,15 +14,9 @@ This project requires Nodejs version 20.6 or later.
 npm install
 ```
 
-### Chrome Extension
+### iOS Application
 
-The glue requires a local copy of Taho Wallet. The publicly available extension may be fetched with:
-
-```bash
-wget \
-    -O taho.crx \
-    'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=118.0.5993.70&acceptformat=crx2,crx3&x=id%3Deajafomhmkipbjmfmhebemolkcicgfmd%26uc'
-```
+The glue requires the Unstoppable app installed on a real device. The app can be installed from the [App Store](https://apps.apple.com/us/app/unstoppable-crypto-wallet/id1447619907?ls=1).
 
 ## Building
 
@@ -38,7 +32,19 @@ npm test
 
 ## Running
 
+Running these tests requires launching two executables: an appium server, and the glue.
+
+### Appium
+
+Getting appium to launch properly can be difficult. Follow their guides for more information.
+
 ```bash
-npx glue-taho \
-    --extension-path /path/to/crx/file
+npx appium
+```
+
+### Tests
+
+```bash
+npx glue-unstoppable-ios \
+    --udid <device id>
 ```

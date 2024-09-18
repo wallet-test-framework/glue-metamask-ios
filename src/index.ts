@@ -1,4 +1,4 @@
-import { TahoGlue } from "./glue.js";
+import { MetaMaskIosGlue } from "./glue.js";
 import { logger } from "./logger.js";
 import serveGlue, { ServeResult } from "@wallet-test-framework/glue-ws";
 import meow from "meow";
@@ -6,7 +6,7 @@ import * as process from "node:process";
 
 async function serve(
     baseUrl: string,
-    implementation: TahoGlue,
+    implementation: MetaMaskIosGlue,
     serveResult: ServeResult,
 ): Promise<void> {
     let glueUrl: string;
@@ -14,9 +14,9 @@ async function serve(
     if (typeof serveResult.address === "string") {
         throw new Error("not implemented"); // TODO
     } else {
-        const host =
-            serveResult.address.family === "IPv6" ? "[::1]" : "127.0.0.1";
-        glueUrl = `ws://${host}:${serveResult.address.port}/`;
+        const host = "192.168.2.197";
+        //    serveResult.address.family === "IPv6" ? "[::1]" : "127.0.0.1";
+        glueUrl = `ws://${host}:3001/`;
     }
 
     const parsedUrl = new URL(baseUrl);
@@ -30,12 +30,13 @@ export async function main(args: string[]): Promise<void> {
         argv: args.slice(2),
         importMeta: import.meta,
         flags: {
-            extensionPath: {
+            platformVersion: {
                 type: "string",
                 isRequired: true,
             },
-            browserVersion: {
+            udid: {
                 type: "string",
+                isRequired: true,
             },
             testUrl: {
                 type: "string",
@@ -44,11 +45,11 @@ export async function main(args: string[]): Promise<void> {
         },
     });
 
-    const implementation = new TahoGlue(
-        cli.flags.extensionPath,
-        cli.flags.browserVersion,
+    const implementation = new MetaMaskIosGlue(
+        cli.flags.udid,
+        cli.flags.platformVersion,
     );
-    const serveResult = serveGlue(implementation, { port: 0 });
+    const serveResult = serveGlue(implementation, { host: "192.168.2.197", port: 3001 });
 
     try {
         await serve(cli.flags.testUrl, implementation, serveResult);
